@@ -5,24 +5,24 @@
 #define JTHREAD_HPP
 
 #include "stop_token.hpp"
-#include <thread>
-#include <future>
 #include <type_traits>
-#include <functional>  // for invoke()
-#include <iostream>    // for debugging output
+
+#include <functional> // for invoke()
+#include <thread>
+#include <utility> // for move()
 
 namespace std {
 
-//***************************************** 
+//*****************************************
 //* class jthread
-//* - joining std::thread with signaling stop/end support 
-//***************************************** 
+//* - joining std::thread with signaling stop/end support
+//*****************************************
 class jthread
 {
-  public:
-    //***************************************** 
+public:
+    //*****************************************
     //* standardized API:
-    //***************************************** 
+    //*****************************************
     // - cover full API of std::thread
     //   to be able to switch from std::thread to std::jthread
 
@@ -32,21 +32,23 @@ class jthread
 
     // construct/copy/destroy:
     jthread() noexcept;
-    //template <typename F, typename... Args> explicit jthread(F&& f, Args&&... args);
+    // template <typename F, typename... Args> explicit jthread(F&& f, Args&&...
+    // args);
     // THE constructor that starts the thread:
     // - NOTE: does SFINAE out copy constructor semantics
     template <typename Callable, typename... Args,
-              typename = ::std::enable_if_t<!::std::is_same_v<::std::decay_t<Callable>, jthread>>>
-    explicit jthread(Callable&& cb, Args&&... args);
+              typename = ::std::enable_if_t<
+                  !::std::is_same_v<::std::decay_t<Callable>, jthread>>>
+    explicit jthread(Callable &&cb, Args &&... args);
     ~jthread();
 
-    jthread(const jthread&) = delete;
-    jthread(jthread&&) noexcept = default;
-    jthread& operator=(const jthread&) = delete;
-    jthread& operator=(jthread&&) noexcept = default;
+    jthread(const jthread &) = delete;
+    jthread(jthread &&) noexcept = default;
+    jthread &operator=(const jthread &) = delete;
+    jthread &operator=(jthread &&) noexcept = default;
 
     // members:
-    void swap(jthread&) noexcept;
+    void swap(jthread &) noexcept;
     bool joinable() const noexcept;
     void join();
     void detach();
@@ -55,108 +57,99 @@ class jthread
     native_handle_type native_handle();
 
     // static members:
-    static unsigned hardware_concurrency() noexcept {
-      return ::std::thread::hardware_concurrency();
+    static unsigned hardware_concurrency() noexcept
+    {
+        return ::std::thread::hardware_concurrency();
     };
 
-    //***************************************** 
+    //*****************************************
     // - supplementary API:
     //   - for the calling thread:
     [[nodiscard]] stop_source get_stop_source() noexcept;
     [[nodiscard]] stop_token get_stop_token() const noexcept;
-    bool request_stop() noexcept {
-      return get_stop_source().request_stop();
-    }
+    bool request_stop() noexcept { return get_stop_source().request_stop(); }
 
+    //*****************************************
+    //* implementation:
+    //*****************************************
 
-  //***************************************** 
-  //* implementation:
-  //***************************************** 
-
-  private:
+private:
     //*** API for the starting thread:
-    stop_source _stopSource;                   // stop_source for started thread
-    ::std::thread _thread{};                   // started thread (if any)
+    stop_source _stopSource; // stop_source for started thread
+    ::std::thread _thread{}; // started thread (if any)
 };
-
 
 //**********************************************************************
 
-//***************************************** 
+//*****************************************
 //* implementation of class jthread
-//***************************************** 
+//*****************************************
 
 // default constructor:
-inline jthread::jthread() noexcept
- : _stopSource{nostopstate} {
-}
+inline jthread::jthread() noexcept : _stopSource{nostopstate} {}
 
 // THE constructor that starts the thread:
 // - NOTE: declaration does SFINAE out copy constructor semantics
-template <typename Callable, typename... Args,
-          typename >
-inline jthread::jthread(Callable&& cb, Args&&... args)
- : _stopSource{},                             // initialize stop_source
-   _thread{[] (stop_token st, auto&& cb, auto&&... args) {   // called lambda in the thread
-                 // perform tasks of the thread:
-                 if constexpr(std::is_invocable_v<Callable, stop_token, Args...>) {
-                   // pass the stop_token as first argument to the started thread:
-                   ::std::invoke(::std::forward<decltype(cb)>(cb),
-                                 std::move(st),
-                                 ::std::forward<decltype(args)>(args)...);
-                 }
-                 else {
-                   // started thread does not expect a stop token:
-                   ::std::invoke(::std::forward<decltype(cb)>(cb),
-                                 ::std::forward<decltype(args)>(args)...);
-                 }
-               },
-               _stopSource.get_token(),   // not captured due to possible races if immediately set
-               ::std::forward<Callable>(cb),  // pass callable
-               ::std::forward<Args>(args)...  // pass arguments for callable
-           }
-{
-}
+template <typename Callable, typename... Args, typename>
+inline jthread::jthread(Callable &&cb, Args &&... args)
+    : _stopSource{}, // initialize stop_source
+      _thread{
+          [](stop_token st, auto &&cb,
+             auto &&... args) { // called lambda in the thread
+              // perform tasks of the thread:
+              if constexpr (std::is_invocable_v<Callable, stop_token,
+                                                Args...>) {
+                  // pass the stop_token as first argument to the started
+                  // thread:
+                  ::std::invoke(::std::forward<decltype(cb)>(cb), std::move(st),
+                                ::std::forward<decltype(args)>(args)...);
+              } else {
+                  // started thread does not expect a stop token:
+                  ::std::invoke(::std::forward<decltype(cb)>(cb),
+                                ::std::forward<decltype(args)>(args)...);
+              }
+          },
+          _stopSource.get_token(),      // not captured due to possible races if
+                                        // immediately set
+          ::std::forward<Callable>(cb), // pass callable
+          ::std::forward<Args>(args)... // pass arguments for callable
+      }
+{}
 
 // destructor:
-jthread::~jthread() {
-  if (joinable()) {   // if not joined/detached, signal stop and wait for end:
-    request_stop();
-    join();
-  }
+jthread::~jthread()
+{
+    if (joinable()) { // if not joined/detached, signal stop and wait for end:
+        request_stop();
+        join();
+    }
 }
-
 
 // others:
-inline bool jthread::joinable() const noexcept {
-  return _thread.joinable();
+inline bool jthread::joinable() const noexcept { return _thread.joinable(); }
+inline void jthread::join() { _thread.join(); }
+inline void jthread::detach() { _thread.detach(); }
+inline typename jthread::id jthread::get_id() const noexcept
+{
+    return _thread.get_id();
 }
-inline void jthread::join() {
-  _thread.join();
-}
-inline void jthread::detach() {
-  _thread.detach();
-}
-inline typename jthread::id jthread::get_id() const noexcept {
-  return _thread.get_id();
-}
-inline typename jthread::native_handle_type jthread::native_handle() {
-  return _thread.native_handle();
+inline typename jthread::native_handle_type jthread::native_handle()
+{
+    return _thread.native_handle();
 }
 
-inline stop_source jthread::get_stop_source() noexcept {
-  return _stopSource;
-}
-inline stop_token jthread::get_stop_token() const noexcept {
-  return _stopSource.get_token();
+inline stop_source jthread::get_stop_source() noexcept { return _stopSource; }
+inline stop_token jthread::get_stop_token() const noexcept
+{
+    return _stopSource.get_token();
 }
 
-void jthread::swap(jthread& t) noexcept {
+void jthread::swap(jthread &t) noexcept
+{
     std::swap(_stopSource, t._stopSource);
     std::swap(_thread, t._thread);
 }
 
-
-} // std
+} // namespace std
 
 #endif // JTHREAD_HPP

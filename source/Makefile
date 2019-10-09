@@ -1,9 +1,11 @@
 include Makefile.h
 
+.PHONY: default all run_tests
 default: all
 all:: test_stoken test_stokencb test_stokenrace test_stopcb test_jthread1 test_jthread2
 all:: test_cv test_cvcb test_cvrace test_cvrace_hh test_cvrace_stop test_cvrace_pred test_cvprodcons
 all::
+	cppcheck .
 	@echo ""
 	@echo "Testcases:"
 	@echo "  test_stoken"
